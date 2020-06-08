@@ -1,14 +1,19 @@
 package com.airhttp
 {
+    import com.airhttp.context.HttpContext;
+    import com.airhttp.context.HttpEvent;
+    
     import flash.events.Event;
-    import flash.events.ProgressEvent;
+    import flash.events.EventDispatcher;
     import flash.events.ServerSocketConnectEvent;
     import flash.net.ServerSocket;
     import flash.net.Socket;
     import flash.net.URLVariables;
-    import flash.utils.ByteArray;
+    import flash.utils.Dictionary;
     
     import mx.controls.Alert;
+    
+    import avmplus.getQualifiedClassName;
 
     /**
     * HttpServer is a simple HTTP server capable of responding to GET requests
@@ -43,21 +48,31 @@ package com.airhttp
     * </code>
     * 
      */
-    public class HttpServer
+	[Event(name="newContext", type="com.isdraw.http.HttpEvent")] 
+    public class HttpServer extends EventDispatcher
     {
         private var _serverSocket:ServerSocket;
-        private var _mimeTypes:Object = new Object();
         private var _controllers:Object = new Object();
         private var _fileController:FileController;
         private var _errorCallback:Function = null;
         private var _isConnected:Boolean = false;
         private var _maxRequestLength:int = 2048;
         
-        public function HttpServer()
+		// Additions
+		private var cache:Dictionary=new Dictionary(true);
+		
+		protected var _host:String;
+		protected var _port:int;
+		
+        public function HttpServer(host:String="127.0.0.1", port:int=80)
         {
-            _fileController = new FileController();    
+			_host = host;
+			_port = port;
+			
+            registerController(new FileController());    
+			addEventListener(HttpEvent.NEW_CONTEXT, onNewContext);
         }
-        
+		
         /**
         * Retrieve the document root from the server.
          */
@@ -89,6 +104,13 @@ package com.airhttp
           _maxRequestLength = value;
         }
         
+		
+		protected function initialize():void{
+			_serverSocket = new ServerSocket();
+			_serverSocket.addEventListener(Event.CONNECT, onConnect);
+			_serverSocket.bind(_port, _host);
+			_serverSocket.listen();
+		}
         /**
         * Begin listening on a specified port.
         * 
@@ -98,20 +120,17 @@ package com.airhttp
         * 
         * @return true if the port was opened, false if it could not be opened.
          */
-        public function listen(port:int, errorCallback:Function = null):Boolean
+        public function listen(errorCallback:Function = null):Boolean
         {
             this._errorCallback = errorCallback;
             
             try
             {
-                _serverSocket = new ServerSocket();
-                _serverSocket.addEventListener(Event.CONNECT, socketConnectHandler);
-                _serverSocket.bind(port);
-                _serverSocket.listen();
+				initialize();
             }
             catch (error:Error)
             {
-                var message:String = "Port " + port.toString() +
+                var message:String = "Port " + _port.toString() +
                     " may be in use. Enter another port number and try again.\n(" +
                     error.message +")";
                 if (errorCallback != null) {
@@ -134,70 +153,48 @@ package com.airhttp
             return this;  
         }
         
-        /**
-        * Handle new connections to the server.
-         */
-        private function socketConnectHandler(event:ServerSocketConnectEvent):void
-        {
-            var socket:Socket = event.socket;
-            socket.addEventListener(ProgressEvent.SOCKET_DATA, socketDataHandler);
-        }
-        
-        /**
-        * Handle data written to open connections. This is where the request is
-        * parsed and routed to a controller.
-         */
-        private function socketDataHandler(event:ProgressEvent):void
-        {
-            try
-            {
-                var socket:Socket = event.target as Socket;
-                var bytes:ByteArray = new ByteArray();
+		/**
+		 * 连接客户端 
+		 * @param e
+		 */		
+		protected function onConnect(e:ServerSocketConnectEvent):void{
+			var context:HttpContext=new HttpContext(e.socket,e.socket.remoteAddress+":"+e.socket.remotePort);
+			context.addEventListener(Event.COMPLETE,onContextComplete);
+		}
+		
+		/**
+		 * request处理结束 
+		 * @param e
+		 * 
+		 */		
+		protected function onContextComplete(e:Event):void{
+			var context:HttpContext=e.target as HttpContext;
+			context.removeEventListener(Event.COMPLETE,onContextComplete);
+			var h:HttpEvent=new HttpEvent(context, HttpEvent.NEW_CONTEXT);
+			this.dispatchEvent(h);
+			context.response.flush();
+		}
+		
+		protected function onNewContext(event:HttpEvent):void
+		{
+			// Parse out the controller name, action name and paramert list
+			var url_pattern:RegExp      = /(.*)\/([^\?]*)\??(.*)$/;
+			var url:String				= event.context.request.rawURL;
+			var controller_key:String   = url.replace(url_pattern, "$1");
+			var action_key:String       = url.replace(url_pattern, "$2");
+			var param_string:String     = url.replace(url_pattern, "$3");
+			
+			var controller:ActionController = _controllers[controller_key];
+			
+			if (controller) {
+				controller.doAction(action_key, event.context.request.json);
+				/*try{
+				}catch(e:Error){
+					throw new Error("The method [" + action_key + "] in " + getQualifiedClassName(controller) + " class doesn't exit");
+				}*/
+			}
+			
+		}
 
-                // Do not read more than _maxRequestLength bytes
-                var bytes_to_read:int = (socket.bytesAvailable > _maxRequestLength) ? _maxRequestLength : socket.bytesAvailable;
-                
-                // Get the request string and pull out the URL 
-                socket.readBytes(bytes);
-                var request:String          = "" + bytes;
-                var url:String              = request.substring(4, request.indexOf("HTTP/") - 1);
-                
-                // It must be a GET request
-                if (request.substring(0, 3).toUpperCase() != 'GET') {
-                  socket.writeUTFBytes(ActionController.responseNotAllowed("HttpServer only supports GET requests."))
-                  socket.flush();
-                  socket.close();
-                  return;
-                }
-                
-                // Parse out the controller name, action name and paramert list
-                var url_pattern:RegExp      = /(.*)\/([^\?]*)\??(.*)$/;
-                var controller_key:String   = url.replace(url_pattern, "$1");
-                var action_key:String       = url.replace(url_pattern, "$2");
-                var param_string:String     = url.replace(url_pattern, "$3");
-                
-                var controller:ActionController = _controllers[controller_key];
-                
-                if (controller) {
-                    param_string = param_string == "" ? null : param_string;
-                    socket.writeUTFBytes(controller.doAction(action_key, new URLVariables(param_string)));
-                }
-                else {
-                    socket.writeBytes(_fileController.getFile(url));
-                }
-                
-                socket.flush();
-                socket.close();
-            }
-            catch (error:Error)
-            {
-                if (_errorCallback != null) {
-                    _errorCallback(error, error.message);
-                }
-                else {
-                    Alert.show(error.message, "Error");
-                }
-            }
-        }
     }
 }

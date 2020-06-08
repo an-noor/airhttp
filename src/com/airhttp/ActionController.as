@@ -1,6 +1,5 @@
 package com.airhttp
 {
-    import flash.net.URLVariables;
 
     /**
     * ActionController is the base class for all web requests
@@ -62,7 +61,7 @@ package com.airhttp
         /**
         * The main entry point for calling an action by the <code>HttpServer</code>
          */
-        public function doAction(action:String, params:URLVariables):String
+        public function doAction(action:String, params:*):String
         {
             if (action == "") {
                 action = "index";
@@ -77,7 +76,7 @@ package com.airhttp
         /**
         * The default implementation for <code>index</code>
          */
-        public function index(params:URLVariables):String
+        public function index(params:*):String
         {
             return responseSuccess("");
         }

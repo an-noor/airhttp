@@ -32,7 +32,7 @@ package com.airhttp
         * @param webroot is the directory relative to the application
         * storage directory that will serve up files.
          */
-        public function FileController(webroot:String = "webroot")
+        public function FileController(webroot:String = "www")
         {
             super();
             _webroot = webroot;
